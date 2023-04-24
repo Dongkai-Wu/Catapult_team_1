@@ -1,0 +1,590 @@
+---
+title: "shots-detection"
+author: "Kai"
+date: "2023-04-06"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+
+```{r}
+library(readr)
+library(tidyverse)
+library(plotly)
+library(patchwork)
+library(dplyr)
+McKegg <- read.csv('/Users/dongkaiwu/Desktop/Catapult/{None} 8151 202212161830.raw.csv', skip = 3)
+
+dat <- McKegg
+library(ggplot2)
+library(esquisse)
+
+dat$Game_Time_sec <- (dat$AbsoluteCS - 167124444666)/ 100
+dat <- subset(dat, dat$Game_Time_sec>=0 & dat$Game_Time_sec < 961 )
+
+# remove unnecessary variables from dataframe
+dat <- dat[,colSums(is.na(dat))<nrow(dat)]
+
+
+#glimpse(dat)
+```
+
+
+# Function to detect shot for practice shots not useful in games
+```{r}
+find_highest_points <- function(df) {
+  max_indices <- c()
+  max_values <- c()
+  for (i in 2:(length(df[,1])-1)) {
+    if (df$SmoothedPlayerLoad[i] > 0.07 & df$SmoothedPlayerLoad[i] > df$SmoothedPlayerLoad[i-1] & df$SmoothedPlayerLoad[i] > df$SmoothedPlayerLoad[i+1]) {
+      max_indices <- c(max_indices, i)
+      max_values <- c(max_values, df$SmoothedPlayerLoad[i])
+    }
+  }
+  max_time <- df$RelativeCS[max_indices]
+  max_height <- df$RawPlayerLoad1DUp[max_indices]
+  return(list("Timestamp of shots" = max_time))
+}
+```
+
+
+# Function to return rows of data that is a shot 
+```{r}
+data_start_time <- 167124444666 
+playerdata <- dat
+
+find_shot_time <- function(shot_time) {
+  lower_bound <- (shot_time - 0.499) * 100 + data_start_time
+  upper_bound <- (shot_time + 0.5) * 100 + data_start_time
+  subset_data <- playerdata[playerdata$AbsoluteCS >= lower_bound & playerdata$AbsoluteCS <= upper_bound, ]
+  subset_data <- subset_data %>% mutate(Instance_ID = row_number())
+  #subset_data$Bag_ID <- Bag_ID
+  #subset_data$ShotTaken <- 1
+  subset_data <- subset_data[, !(names(subset_data) %in% c("RelativeCS","AbsoluteCS","HeartRate", "Game_Time_sec", "Bag_ID", "ShotTaken"))]
+
+  return(subset_data)
+}
+
+
+find_Notshot_time <- function(shot_time) {
+  lower_bound <- (shot_time - 0.499) * 100 + data_start_time
+  upper_bound <- (shot_time + 0.5) * 100 + data_start_time
+  subset_data <- playerdata[playerdata$AbsoluteCS >= lower_bound & playerdata$AbsoluteCS <= upper_bound, ]
+    subset_data <- subset_data %>% mutate(Instance_ID = row_number())
+#  subset_data$Bag_ID <- Bag_ID
+#  subset_data$ShotTaken <- 0
+  subset_data <- subset_data[, !(names(subset_data) %in% c("RelativeCS","AbsoluteCS","HeartRate", "Game_Time_sec", "Bag_ID", "ShotTaken"))]
+  return(subset_data)
+}
+
+```
+
+
+# Add tags to data Shot or Not a shot
+```{r}
+# 使用说明： find_shot_time(31.6,1) 31.6 就是事件发生的中心时间，1是Bag_ID。Bag_ID不能重复
+shot_1 <- find_shot_time(31.6)
+shot_2 <- find_shot_time(42.3)
+shot_3 <- find_shot_time(166.73)
+shot_4 <- find_shot_time(52.1)
+shot_5 <- find_shot_time(128.75)
+shot_6 <- find_shot_time(136.3)
+shot_7 <- find_shot_time(146.35)
+#shot_8 <- find_shot_time(159.5, 8)
+
+
+Not_shot_1 <- find_Notshot_time(51)
+Not_shot_2 <- find_Notshot_time(73) # 73 is a pass similar pattern with shot
+Not_shot_3 <- find_Notshot_time(157)
+Not_shot_4 <- find_Notshot_time(81)
+Not_shot_5 <- find_Notshot_time(25)
+#Not_shot_6 <- find_Notshot_time(120, 15)
+
+all_tagged_data <- rbind(shot_1, shot_2, shot_3, shot_4,shot_5,shot_6,shot_7 , Not_shot_1, Not_shot_2,Not_shot_3,Not_shot_4,Not_shot_5)
+
+# get rid of confunding columns
+#all_tagged_data <- all_tagged_data[, -(1:2)]
+#all_tagged_data <- all_tagged_data[, -(23:24)]
+
+```
+
+
+# pivot wider shot and nonshot dataset
+```{r}
+# create a list of your 12 datasets
+list_of_shotdf <- list(shot_1, shot_2, shot_3, shot_4, shot_5, shot_6, shot_7)
+list_of_nonshotdf <- list(Not_shot_1, Not_shot_2,Not_shot_3,Not_shot_4,Not_shot_5)
+# define a function to pivot_wider and add ShotTaken column
+
+pivot_and_add_shot_taken <- function(df){
+  df_wide <- pivot_wider(df, names_from = Instance_ID, values_from = c("Acceleration.forward","Acceleration.side","Acceleration.up","Rotation.roll","Rotation.pitch","Rotation.yaw","imuRotation.roll","imuRotation.pitch","imuRotation.yaw","RawPlayerLoad","SmoothedPlayerLoad","RawPlayerLoad2D","RawPlayerLoad1DFwd","RawPlayerLoad1DSide","RawPlayerLoad1DUp","imuAcceleration.forward","imuAcceleration.side","imuAcceleration.up" ,"imuOrientation.forward","imuOrientation.side","imuOrientation.up", "Facing"), names_sep = "_")
+  df_wide$ShotTaken <- 1
+  return(df_wide)
+}
+
+pivot_and_add_nonshot_taken <- function(df){
+  df_wide <- pivot_wider(df, names_from = Instance_ID, values_from = c("Acceleration.forward","Acceleration.side","Acceleration.up","Rotation.roll","Rotation.pitch","Rotation.yaw","imuRotation.roll","imuRotation.pitch","imuRotation.yaw","RawPlayerLoad","SmoothedPlayerLoad","RawPlayerLoad2D","RawPlayerLoad1DFwd","RawPlayerLoad1DSide","RawPlayerLoad1DUp","imuAcceleration.forward","imuAcceleration.side","imuAcceleration.up" ,"imuOrientation.forward","imuOrientation.side","imuOrientation.up", "Facing"), names_sep = "_")
+  df_wide$ShotTaken <- 0
+  return(df_wide)
+}
+
+
+# apply the function to all datasets using lapply and combine the resulting data frames
+final_shotdf <- bind_rows(lapply(list_of_shotdf, pivot_and_add_shot_taken))
+final_nonshotdf <- bind_rows(lapply(list_of_nonshotdf, pivot_and_add_nonshot_taken))
+```
+
+```{r}
+
+```
+
+
+# final version
+```{r}
+library(shiny)
+library(ggplot2)
+
+visualdata <- as.data.frame(dat)
+
+# Define UI for application
+ui <- fluidPage(
+  
+  # Application title
+  titlePanel("Shot Data Visualization"),
+
+  # Sidebar with a slider input for time
+  sidebarLayout(
+    sidebarPanel(
+      sliderInput("time", "Time (s)",
+                  min = min(visualdata$Game_Time_sec),
+                  max = max(visualdata$Game_Time_sec),
+                  value = c(min(visualdata$Game_Time_sec), max(visualdata$Game_Time_sec)),
+                  step = 0.1)
+    ),
+    
+    # Main panel with plots and result frame
+    mainPanel(
+      tabsetPanel(
+        tabPanel("Acceleration and Rotation Plots",
+                 plotOutput("acceleration_plot"),
+                 plotOutput("rotation_plot")
+        )
+      )
+    )
+  )
+)
+
+
+
+# Define server logic
+server <- function(input, output) {
+  
+  # Subset data based on time range input
+  data <- reactive({
+    visualdata %>%
+      filter(Game_Time_sec >= input$time[1] & Game_Time_sec <= input$time[2])
+  })
+  
+  # Plot acceleration data
+  output$acceleration_plot <- renderPlot({
+    results <- find_highest_points(data())
+    ggplot(data(), aes(x = Game_Time_sec)) +
+      geom_line(aes(y = imuAcceleration.forward), color = "brown1") +
+      geom_line(aes(y = imuAcceleration.side), color = "gold") +
+      geom_line(aes(y = imuAcceleration.up), color = "green") +
+      labs(title = "IMU Acceleration Data", y = "Acceleration") +
+      theme_minimal() +
+      geom_point(data = data() %>%
+                   filter(Game_Time_sec %in% results$"Timestamp of shots"),
+                 aes(x = Game_Time_sec, y = imuAcceleration.up), color = "red", size = 3)
+  })
+  
+  # Plot rotation data
+  output$rotation_plot <- renderPlot({
+    results <- find_highest_points(data())
+    ggplot(data(), aes(x = Game_Time_sec)) +
+      geom_line(aes(y = imuRotation.pitch), color = "darkturquoise") +
+      geom_line(aes(y = imuRotation.roll), color = "deepskyblue4") +
+      geom_line(aes(y = imuRotation.yaw), color = "purple") +
+      labs(title = "IMU Rotation Data", y = "Rotation") +
+      theme_minimal() +
+      geom_point(data = data() %>%
+                   filter(Game_Time_sec %in% results$"Timestamp of shots"),
+                 aes(x = Game_Time_sec, y = imuRotation.pitch), color = "red", size = 3)
+  })
+  
+  
+}
+
+# Run the application 
+shinyApp(ui = ui, server = server)
+
+```
+
+
+
+# xgboost example, use as references
+```{r}
+library(xgboost)
+
+# Generate some random multi-instance data
+n_bags <- 1000
+n_instances <- 10
+n_features <- 22
+X <- array(runif(n_bags * n_instances * n_features), dim = c(n_bags, n_instances, n_features))
+y <- ifelse(rowSums(X[, , 1] > 0.5) >= 3, 1, 0)
+view(X)
+# Split the data into training and test sets
+train_idx <- sample(n_bags, n_bags * 0.8)
+X_train <- X[train_idx, , ]
+y_train <- y[train_idx]
+X_test <- X[-train_idx, , ]
+y_test <- y[-train_idx]
+
+# Reshape the input data for XGBoost
+X_train_reshaped <- matrix(X_train, nrow = length(y_train), ncol = n_instances * n_features)
+X_test_reshaped <- matrix(X_test, nrow = length(y_test), ncol = n_instances * n_features)
+
+# Train the XGBoost model
+model <- xgboost(
+  data = as.matrix(X_train_reshaped),
+  label = y_train,
+  objective = "binary:logistic",
+  eval_metric = "auc",
+  nrounds = 100,
+  verbose = 0
+)
+
+# Make predictions on the test set
+y_pred <- predict(model, as.matrix(X_test_reshaped))
+
+view(y_pred)
+# Calculate the AUC of the predictions
+library(pROC)
+auc(y_test, y_pred)
+
+```
+
+
+
+
+
+
+```{r}
+shot_1 <- shot_1[, -(1:2)]
+shot_1 <- shot_1[, !(names(shot_1) %in% c("RelativeCS","AbsoluteCS","HeartRate", "Game_Time_sec", "Bag_ID", "ShotTaken"))]
+
+shot_1_wide <- pivot_wider(shot_1, names_from = Instance_ID, values_from = c("Acceleration.forward","Acceleration.side","Acceleration.up","Rotation.roll","Rotation.pitch","Rotation.yaw","imuRotation.roll","imuRotation.pitch","imuRotation.yaw","RawPlayerLoad","SmoothedPlayerLoad","RawPlayerLoad2D","RawPlayerLoad1DFwd","RawPlayerLoad1DSide","RawPlayerLoad1DUp","imuAcceleration.forward","imuAcceleration.side","imuAcceleration.up" ,"imuOrientation.forward","imuOrientation.side","imuOrientation.up", "Facing"), names_sep = "_")
+
+shot_1_wide$ShotTaken <- 1
+```
+
+
+
+
+```{r}
+
+# Train the model on the list of bags
+model %>% fit(
+  x = train_bags$instances,
+  y = train_bags$class ,
+  epochs = 10,
+  batch_size = 2
+)
+```
+
+
+
+# Load the required libraries
+library(keras)
+library(tidyverse)
+
+# Define the bag of features CNN model
+model <- keras_model_sequential() %>%
+  # Apply the convolutional filters to the instances within each bag
+  layer_conv_1d(filters = 16, kernel_size = 3, activation = "relu", input_shape = c(NULL, n_features)) %>%
+  layer_global_max_pooling_1d() %>%
+  # Feed the fixed-size representations into a fully connected layer for classification
+  layer_dense(units = 1, activation = "sigmoid")
+
+# Compile the model with the binary cross-entropy loss function and the Adam optimizer
+model %>% compile(
+  loss = "binary_crossentropy",
+  optimizer = optimizer_adam(),
+  metrics = list("accuracy")
+)
+
+# Prepare the training data
+train_data <- data.frame(
+  BagID = c(1, 1, 1, 1, 2, 2, 2, 2),
+  InstanceID = c(1, 2, 3, 4, 1, 2, 3, 4),
+  Feature1 = c(0.1, 0.2, 0.3, 0.4, 0.9, 0.8, 0.7, 0.6),
+  Feature2 = c(0.3, 0.4, 0.1, 0.2, 0.7, 0.6, 0.9, 0.8),
+  Feature3 = c(0.2, 0.1, 0.4, 0.3, 0.8, 0.9, 0.6, 0.7),
+  Class = c(1, 1, 1, 1, 0, 0, 0, 0)
+)
+
+# Convert the training data to a list of bags
+train_bags <- train_data %>%
+  group_by(BagID) %>%
+  summarize(
+    instances = list(as.matrix(select(., -BagID, -InstanceID, -Class))),
+    class = unique(Class)
+  )
+
+# Train the model on the list of bags
+model %>% fit(
+  x = train_bags$instances,
+  y = train_bags$class,
+  epochs = 10,
+  batch_size = 2
+)
+
+# Make predictions on new data
+new_data <- data.frame(
+  BagID = c(3, 4, 5, 6),
+  InstanceID = c(1, 2, 1, 2),
+  Feature1 = c(0.2, 0.3, 0.6, 0.7),
+  Feature2 = c(0.1, 0.2, 0.3, 0.4),
+  Feature3 = c(0.4, 0.3, 0.2, 0.1)
+)
+
+# Convert the new data to a list of bags
+new_bags <- new_data %>%
+  group_by(BagID) %>%
+  summarize
+
+```{r}
+# write.csv(all_tagged_data, file = "/Users/dongkaiwu/Desktop/Catapult/all_tagged_data.csv")
+```
+
+
+
+```{r}
+library(neuralnet)
+nn <- neuralnet(ShotTaken ~ ., data = all_tagged_data)
+plot(nn)
+```
+
+```{r}
+# Assuming you have new data in a data frame called "new_data"
+test_data <- shot_8[,1:26]
+true_values <- shot_8[,27]
+predicted_values <- compute(nn, test_data)
+mean(predicted_values$net.result)
+
+```
+
+
+```{r}
+
+```
+
+
+# Apply the cross Validation to my model
+```{r}
+# Load the caret package
+library(caret)
+
+# Specify the cross-validation method using trainControl()
+ctrl <- trainControl(method = "cv", number = 2)
+
+# Convert binary outcome variable to factor with levels 0 and 1
+all_tagged_data$ShotTaken <- factor(all_tagged_data$ShotTaken, levels = c(0, 1))
+# Train the model using the train() function
+model <- train(ShotTaken ~ ., data = all_tagged_data, method = "glm", family = "binomial", trControl = ctrl)
+
+
+summary(model)
+
+```
+
+
+# Apply the gradient descent to my model
+```{r}
+# Load the nnet package
+library(nnet)
+
+# Split the data into training and testing sets
+set.seed(123)
+train_indices <- sample(nrow(all_tagged_data), nrow(all_tagged_data) * 0.8)
+train_data <- all_tagged_data[train_indices, ]
+test_data <- all_tagged_data[-train_indices, ]
+
+# Train the neural network model for binary classification using logistic activation function and cross-entropy error function
+train_data$ShotTaken <- as.numeric(train_data$ShotTaken)
+model <- nnet(ShotTaken ~ ., data = train_data, size = 5, maxit = 1000, linout = TRUE, entropy = FALSE, family = "binomial")
+
+
+# Make predictions on the test data
+predictions <- predict(model, newdata = test_data)
+
+# Compute the accuracy of the model
+accuracy <- mean(predictions == test_data$ShotTaken)
+
+```
+
+
+
+# Get a R-Squared and Adjusted R-Square
+```{r}
+n <- length(true_values)
+p <- length(all_tagged_data) -1   # number of predictor variables in the model
+r_squared <- 1 - sum((true_values - predicted_values$net.result)^2) / sum((true_values - mean(true_values))^2)
+
+
+adj_r_squared <- 1 - ((1 - r_squared) * (n - 1)) / (n - p - 1)
+
+```
+
+
+
+
+# Apply the Convolutional Neural Network (CNN) model. 
+```{r}
+library(keras)
+library(tensorflow)
+
+
+
+# Load and preprocess your data
+
+X <- as.matrix(all_tagged_data[, 1:26])
+y <- as.matrix(all_tagged_data[, 27])
+X_norm <- scale(X)
+
+# Split your data into training, validation, and test sets
+set.seed(123)
+indices <- sample(nrow(X), nrow(X)*0.8)
+train_indices <- indices[1:round(length(indices)*0.6)]
+val_indices <- indices[(round(length(indices)*0.6)+1):round(length(indices)*0.8)]
+test_indices <- indices[(round(length(indices)*0.8)+1):length(indices)]
+X_train <- X_norm[train_indices, ]
+y_train <- y[train_indices]
+X_val <- X_norm[val_indices, ]
+y_val <- y[val_indices]
+X_test <- X_norm[test_indices, ]
+y_test <- y[test_indices]
+
+# Build your model
+model <- keras_model_sequential() %>%
+  layer_reshape(input_shape = c(23, 1), target_shape = c(23, 1, 1)) %>%
+  layer_conv_1d(filters = 32, kernel_size = 3, activation = "relu") %>%
+  layer_max_pooling_1d(pool_size = 2) %>%
+  layer_conv_1d(filters = 64, kernel_size = 3, activation = "relu") %>%
+  layer_max_pooling_1d(pool_size = 2) %>%
+  layer_flatten() %>%
+  layer_dense(units = 64, activation = "relu") %>%
+  layer_dropout(rate = 0.5) %>%
+  layer_dense(units = 1, activation = "sigmoid")
+
+
+
+# Compile your model
+model %>% compile(
+  loss = "binary_crossentropy",
+  optimizer = optimizer_rmsprop(lr = 1e-4),
+  metrics = list("accuracy")
+)
+
+# Train your model
+history <- model %>% fit(
+  x = X_train,
+  y = y_train,
+  epochs = 50,
+  batch_size = 32,
+  validation_data = list(X_val, y_val)
+)
+
+# Evaluate your model
+score <- model %>% evaluate(X_test, y_test)
+cat("Test accuracy:", score[2], "\n")
+
+```
+
+
+
+
+
+
+
+# temporary version
+```{r}
+library(shiny)
+library(ggplot2)
+
+shots1FH_dat<-as.data.frame(shot_1)
+
+# Define UI for application
+ui <- fluidPage(
+
+  # Application title
+  titlePanel("Shot Data Visualization"),
+
+  # Sidebar with a slider input for time
+  sidebarLayout(
+    sidebarPanel(
+      sliderInput("time", "Time (s)",
+                  min = min(shots1FH_dat$RelativeCS),
+                  max = max(shots1FH_dat$RelativeCS),
+                  value = c(min(shots1FH_dat$RelativeCS), max(shots1FH_dat$RelativeCS)),
+                  step = 0.1)
+    ),
+
+    # Main panel with plots and result frame
+    mainPanel(
+      plotOutput("acceleration_plot"),
+      plotOutput("rotation_plot"),
+      tableOutput("result_table")
+    )
+  )
+)
+
+# Define server logic
+server <- function(input, output) {
+
+  # Subset data based on time range input
+  data <- reactive({
+    shots1FH_dat %>%
+      filter(RelativeCS >= input$time[1] & RelativeCS <= input$time[2])
+  })
+
+  # Plot acceleration data
+  output$acceleration_plot <- renderPlot({
+    ggplot(data(), aes(x = RelativeCS)) +
+      geom_line(aes(y = imuAcceleration.forward), color = "red") +
+      geom_line(aes(y = imuAcceleration.side), color = "green") +
+      geom_line(aes(y = imuAcceleration.up), color = "blue") +
+      labs(title = "IMU Acceleration Data", y = "Acceleration") +
+      theme_minimal()
+  })
+
+  # Plot rotation data
+  output$rotation_plot <- renderPlot({
+    ggplot(data(), aes(x = RelativeCS)) +
+      geom_line(aes(y = imuRotation.pitch), color = "red") +
+      geom_line(aes(y = imuRotation.roll), color = "green") +
+      geom_line(aes(y = imuRotation.yaw), color = "blue") +
+      labs(title = "IMU Rotation Data", y = "Rotation") +
+      theme_minimal()
+  })
+
+  # Display results of find_highest_points function
+  output$result_table <- renderTable({
+  results <- find_highest_points(data())
+  data.frame("Timestamp of shots" = results$"Timestamp of shots", "Peak height of shots" = results$"Peak height of shots")
+})
+
+}
+
+# Run the application 
+shinyApp(ui = ui, server = server)
+
+
+```
+
